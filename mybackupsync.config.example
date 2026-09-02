@@ -1,0 +1,39 @@
+# MyBackUpSync - example configuration file.
+#
+# Copy this file to the root folder of the backup hard drive and rename it to
+# 'mybackupsync.config', then adapt the paths below.
+#
+#   [<computer_directory>/ -> <backup_directory>/]
+#
+#   <computer_directory>/  absolute path on the computer, mounting point included
+#   <backup_directory>/    relative to the root of the backup drive
+#
+# The '!' lines below a tag apply to that directory only:
+#
+#   !/<sub_directory>/   ignore that one subdirectory, at that exact place
+#   !*/<directory>/      ignore every directory with that name, at any level
+#   !/<file>             ignore that one file, at that exact place
+#   !*/<file>            ignore every file with that name, at any level
+#
+# '*' matches any sequence of characters. Everything after a '#' is a comment.
+
+# --- Windows -----------------------------------------------------------------
+
+[C:/users/igor/Documents/ -> Documents/]
+!*/~$*                      # ignore the lock files of MS Office
+!*/Thumbs.db                # ignore the Windows thumbnail caches
+
+[D:/src/ -> src/]
+!*/build/                   # ignore every 'build' directory, at any level
+!*/.git/                    # ignore the git repositories
+!/test/                     # ignore only 'D:/src/test/'
+!*/*.cmake                  # ignore every '*.cmake' file, at any level
+!/cli/unused.h              # ignore only 'D:/src/cli/unused.h'
+
+# --- Linux -------------------------------------------------------------------
+#
+# [/home/igor/Documents/ -> Documents/]
+#
+# [/home/igor/src/ -> src/]
+# !*/build/
+# !*/*.o
