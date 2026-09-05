@@ -11,8 +11,11 @@ from .screen import Screen
 from .terminal import Color, Terminal
 
 #: The 'F9' label follows the state of the tree, see App._bottom_keys().
+#: The names are kept FAR short ('RefrDir') so that the whole bar still fits
+#: on an 80 column terminal.
 BOTTOM_KEYS = (
     ("F1", "Refresh"),
+    ("F2", "RefrDir"),
     ("F4", "List"),
     ("F5", "Copy"),
     ("F8", "Delete"),
@@ -44,11 +47,12 @@ class App:
     """Owns the difference tree, the screen and the key loop."""
 
     def __init__(self, backup_root, config_path, entries, check_dir_times=False,
-                 ascii_only=False):
+                 ascii_only=False, ignore_date_time=False):
         self.backup_root = backup_root
         self.config_path = config_path
         self.entries = entries
         self.check_dir_times = check_dir_times
+        self.ignore_date_time = ignore_date_time
 
         self.term = Terminal(ascii_only=ascii_only)
         self.roots = []
@@ -65,7 +69,9 @@ class App:
         """Re-read both drives and rebuild the list of differences."""
         marked = self._current_path() if keep_position else None
         opened = model.expanded_paths(self.roots) if keep_position else set()
-        self.roots, self.warnings = scanner.scan(self.entries, self.check_dir_times)
+        self.roots, self.warnings = scanner.scan(self.entries,
+                                                 self.check_dir_times,
+                                                 self.ignore_date_time)
         model.restore_expanded(self.roots, opened)
         self.rebuild()
         self.cursor = 0
@@ -83,6 +89,15 @@ class App:
     def _current_path(self):
         node = self.current_node()
         return (node.src, node.dst) if node is not None else None
+
+    def _focus(self, node):
+        """Put the cursor back on ``node`` after the list has been rebuilt."""
+        if node is not None:
+            for index, (candidate, _) in enumerate(self.rows):
+                if candidate is node:
+                    self.cursor = index
+                    break
+        self._clamp()
 
     def current_node(self):
         if not self.rows:
@@ -417,6 +432,66 @@ class App:
                               path])
         self.status = "List saved to %s" % path
 
+    def do_rescan_dir(self):
+        """F2: re-read both drives for the directory under the cursor only.
+
+        The rest of the list is left untouched, which makes it cheap to check
+        one directory again after having worked on it outside MyBackUpSync.
+        When the cursor sits on a file, its parent directory is re-read.
+        """
+        node = self.current_node()
+        if node is None:
+            return
+        target = node if node.is_dir else node.parent
+        if target is None:
+            self.status = "This entry has no directory to refresh."
+            return
+
+        owner = target
+        while owner.parent is not None:
+            owner = owner.parent
+        label = target.display_name
+
+        state = model.subtree_state(target)
+        fresh, warnings = scanner.rescan_node(target, self.check_dir_times,
+                                              self.ignore_date_time)
+        for warning in warnings:
+            if warning not in self.warnings:
+                self.warnings.append(warning)
+        if fresh is not None:
+            model.restore_subtree_state(fresh, state)
+
+        parent = target.parent
+        if parent is None:                          # a configured root line
+            index = self.roots.index(target)
+            if fresh is None:
+                del self.roots[index]
+                kept = None
+            else:
+                self.roots[index] = fresh
+                kept = fresh
+        else:
+            index = parent.children.index(target)
+            if fresh is None:
+                del parent.children[index]
+                kept = model.prune(parent)
+            else:
+                fresh.parent = parent
+                parent.children[index] = fresh
+                kept = fresh
+            if kept is None and owner in self.roots:
+                self.roots.remove(owner)
+
+        ancestor = kept.parent if kept is not None else None
+        while ancestor is not None:
+            ancestor.refresh_direction()
+            ancestor = ancestor.parent
+
+        self.rebuild()
+        self._focus(kept)
+        self.status = ("'%s' is synchronised." % label if fresh is None
+                       else "'%s' refreshed." % label)
+
     def do_toggle(self):
         node = self.current_node()
         if node is None:
@@ -513,6 +588,8 @@ class App:
                 elif key == "F1":
                     self.rescan()
                     self.status = "List of differences refreshed."
+                elif key == "F2":
+                    self.do_rescan_dir()
                 elif key == "F4":
                     self.do_list()
                 elif key == "F5":

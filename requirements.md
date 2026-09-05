@@ -22,6 +22,18 @@ The following requirements must be implemented:
 
     - Where `<drive>` is the backup hard drive to sync with. Example `python mybackupsync.py E:\` for Windows or `python mybackupsync.py /mnt/backupmedia/` for Linux.
 
+    - MyBackUpSync accepts the following optional command line options:
+
+        - `--ignore-date-time`: two files or directories carrying the same name on both hard drives must not be considered different when only their creation/modification date and time differ. See [Ignoring the date and time](#ignoring-the-date-and-time).
+
+        - `--check-dir-times`: also report a directory whose modification date differs while its whole content is identical. Without this option a directory date alone is never a difference, because writing anything inside a directory changes that date.
+
+        - `--ascii`: draw the User Interface with plain 7 bit ASCII characters instead of the Unicode glyphs.
+
+        - `--list`: print the list of differences to the standard output and exit, without starting the User Interface.
+
+        - `--version`: print the version and exit.
+
 - MyBackUpSync expects a [Configuration File](#configuration-file) in the root directory of the backup hard drive. If the Configuration File is missing, MyBackUpSync exits with error message.
 
 - MyBackUpSync has a User Interface (UI) described in [UI](#ui).
@@ -34,7 +46,7 @@ Synchronising a computer's hard drive with a backup hard drive means following:
 
     - Check files/directories exists: check if directories and files from computer's hard drive exist on backup hard drive and vice versa.
 
-    - Check files/directories creation/modification date: check if directories and files from computer's hard drive has the same creation/modification date as the ones on backup hard drive.
+    - Check files/directories creation/modification date: check if directories and files from computer's hard drive has the same creation/modification date as the ones on backup hard drive. This check is switched off by the `--ignore-date-time` command line option, see [Ignoring the date and time](#ignoring-the-date-and-time).
 
     - Check files/directories size: check if files from computer's hard drive has the same size as the ones on backup hard drive.
 
@@ -55,6 +67,16 @@ Synchronising a computer's hard drive with a backup hard drive means following:
     - Delete one or many files/directories from backup hard drive.
 
 - The list of directories to check (synchronise) is defined in Configuration File together with some extra rules (optional) which files/directories to ignore in process of sync.
+
+#### Ignoring the date and time
+
+Some backup hard drives cannot carry the creation/modification date and time of the computer's hard drive faithfully (for example a FAT file system storing local times, or a copy made by a tool that stamps the target file with the date of the copy). In that case every file would be reported as different after every copy. The `--ignore-date-time` command line option covers this case:
+
+- If `--ignore-date-time` is given, a file that exists on both hard drives with the same name and the same size must not be reported as a difference, whatever its creation/modification date and time is.
+
+- The other checks are not affected: a file or directory missing on one of the two hard drives, a file with a different size, and a name that is a file on one hard drive and a directory on the other, are still reported as differences.
+
+- A directory date is a date as well: if `--ignore-date-time` is given together with `--check-dir-times`, the date of a directory is not compared either.
 
 ### Configuration File
 
@@ -184,8 +206,10 @@ In the example above `Sub-Directory1/` and `Sub-Directory2/` display their leafs
 The Bottom Pane is located at the bottom of the screen. It displays all the available commands. It looks like:
 
 ```
-[F1 Refresh][F4 List][F5 Copy][F8 Delete][F9 Collapse All][F10 Quit]
+[F1 Refresh][F2 RefrDir][F4 List][F5 Copy][F8 Delete][F9 Collapse All][F10 Quit]
 ```
+
+- The command names are kept short so that the whole Bottom Pane still fits on a terminal 80 characters wide.
 
 - `F9` hides or displays the leafs of all the directories at once. While at least one directory displays its leafs the command is shown as `[F9 Collapse All]`; once every directory is hidden it is shown as `[F9 Expand All]`.
 
@@ -199,7 +223,8 @@ The following actions are available using keyboard:
 - Pos1/End: move the Cursor at the beginning/end in the list of differences in Main Pane.
 - Spacebar: toggle selection of a file or directory (and its content) where the Cursor points to.
 - Enter: if the Cursor points to a directory, hide or display its leafs (files and sub-directories) in the Main Pane. By default the leafs of all directories are hidden.
-- F1 Refresh: re-check again the content of computer's hard drive and backup hard drive and re-generate the list of differences.
+- F1 Refresh: re-check again the content of computer's hard drive and backup hard drive and re-generate the complete list of differences.
+- F2 RefrDir: re-check again the content of one single directory only - the directory the Cursor points to - and re-generate that part of the list of differences. See [Refreshing one directory](#refreshing-one-directory).
 - F4 List: generates a temporary text file containing the list of all differences, display the message where the file was saved. The generated text file must have the same format like the list displayed in the Main Pane.
 - F5 Copy:
     - If there are more files/directories selected (`[X]`), only the selected files/directories are copied, regardless of the Cursor position.
@@ -208,6 +233,22 @@ The following actions are available using keyboard:
     - If there are more files/directories selected (`[X]`), only the files/directories are deleted, regardless of the Cursor position.
     - If there are no files/directories selected (`[X]`), the file/directory where Cursor points to is deleted.
 - F9 Collapse All / Expand All: hide the leafs of all the directories in the Main Pane. If the leafs of all the directories are already hidden, display them all instead.
+
+#### Refreshing one directory
+
+`F2 RefrDir` re-reads both hard drives for one single directory instead of all the configured directories. It is meant for checking a directory again after having changed it outside of MyBackUpSync, without paying for a walk over everything else.
+
+- If the Cursor points to a directory, that directory is re-read. If the Cursor points to a file, the directory containing that file is re-read.
+
+- Only the directory that is re-read, and everything below it, is replaced in the list of differences. Every other line of the Main Pane is left untouched.
+
+- The rules of the Configuration File (`!` lines) that apply to the re-read directory are applied again, exactly as they are during a `F1 Refresh`.
+
+- Inside the re-read directory, the sub-directories that displayed their leafs still display them, and the files and directories that were selected (`[X]`) are still selected, as long as they are still different.
+
+- If the re-read directory turns out to be completely synchronised, it is removed from the list of differences. A parent directory that was only listed because it contained that directory is removed as well, up to and including the configured directory of the `[]` tag.
+
+- A parent directory that is a difference of its own - for example a directory that is missing on the backup hard drive - is not re-read and therefore stays in the list. Only `F1 Refresh` re-checks it.
 
 #### Actions and confirmations
 

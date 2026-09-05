@@ -27,12 +27,22 @@ error message.
 
 Additional options:
 
-| Option              | Effect                                                                   |
-|---------------------|--------------------------------------------------------------------------|
-| `--list`            | print the list of differences to the standard output and exit (no UI)     |
-| `--ascii`           | draw with plain 7 bit characters instead of the box drawing glyphs        |
-| `--check-dir-times` | also report directories whose date differs while their content is equal   |
-| `--version`         | print the version and exit                                               |
+| Option               | Effect                                                                  |
+|----------------------|-------------------------------------------------------------------------|
+| `--list`             | print the list of differences to the standard output and exit (no UI)    |
+| `--ascii`            | draw with plain 7 bit characters instead of the box drawing glyphs       |
+| `--check-dir-times`  | also report directories whose date differs while their content is equal  |
+| `--ignore-date-time` | do not report an entry when only its date and time differ                |
+| `--version`          | print the version and exit                                              |
+
+With `--ignore-date-time` two entries carrying the same name are compared by
+size alone: a file that exists on both drives with the same size is considered
+synchronised however old the two copies are. Missing entries, differing sizes
+and `type!` conflicts are still reported. Because a directory date is a date
+too, `--ignore-date-time` also silences `--check-dir-times` when both are
+given. Use it for a backup drive whose file system does not keep the
+modification times of the computer's drive - a FAT stick that stores local
+times, or a copy made by a tool that stamps the target with the copy date.
 
 ## Configuration file
 
@@ -101,7 +111,7 @@ trailing part of the path and therefore applies at every level.
 │ └─[ ] ->   main.c                                         size       4Kb█│
 │                                                                         ▼│
 └─ D:\src\Sub-Directory1\File12   [5/11] ──────────────────────────────────┘
-[F1 Refresh][F4 List][F5 Copy][F8 Delete][F9 Collapse All][F10 Quit]
+[F1 Refresh][F2 RefrDir][F4 List][F5 Copy][F8 Delete][F9 Collapse All][F10 Quit]
 ```
 
 The frames, the tree, the scroll box and the progress bar use the Unicode box
@@ -134,6 +144,11 @@ The content of every directory starts hidden: only the configured directories
 that still hold a difference are shown. Enter opens or closes the directory
 under the cursor, F9 opens or closes all of them at once.
 
+`F1 Refresh` reads both drives again from top to bottom. `F2 RefrDir` reads
+only the directory the cursor points to - a cheap way to check one directory
+again after having worked on it outside MyBackUpSync, without paying for a
+walk over every configured directory.
+
 A scroll box on the right shows the visible part of the whole list. The bottom
 border shows the full path of the entry under the cursor and its position.
 
@@ -150,7 +165,8 @@ border shows the full path of the entry under the cursor and its position.
 | Space              | mark or unmark the entry (a directory takes its content)    |
 | Enter              | show or hide the content of the directory under the cursor  |
 | Tab                | reverse the copy direction of the entry                     |
-| F1                 | re-read both drives and rebuild the list                    |
+| F1                 | re-read both drives and rebuild the whole list              |
+| F2                 | re-read the directory under the cursor only                 |
 | F4                 | write the list of differences into a temporary text file    |
 | F5                 | copy                                                        |
 | F8                 | delete                                                      |
@@ -168,13 +184,25 @@ In a dialog, Left/Right or Tab change the button, Enter validates, Esc cancels.
 deletes the computer's copy, `<-` deletes the backup copy. Use Tab first if you
 want the other side.
 
+`F2 RefrDir` re-reads one directory and replaces that branch of the tree:
+
+* when the cursor is on a file, its parent directory is re-read;
+* the open directories and the marks inside the branch are kept, so the list
+  looks the same apart from what really changed on the drives;
+* a directory that turns out to be synchronised leaves the list, and so does a
+  parent left with nothing else to report;
+* everything outside the branch is left exactly as it was - including a parent
+  that is itself a difference, for instance a directory still missing on the
+  backup drive. Only `F1 Refresh` rebuilds those.
+
 ## How differences are found
 
 For every configured directory pair, both sides are listed and compared by
 name, type, size and modification date. Binary content is never read.
 
 * different size, or modification date differing by more than 2 seconds
-  (the resolution of FAT file systems), makes a file different;
+  (the resolution of FAT file systems), makes a file different - with
+  `--ignore-date-time` the size alone decides;
 * a name existing on one side only is a difference;
 * a name that is a file on one side and a directory on the other is reported
   as `type!`;
@@ -193,6 +221,10 @@ individual files inside it can still be marked separately.
   its date, which would make every copy produce a new difference. Pass
   `--check-dir-times` to get the strict behaviour. Directories that are created
   by a copy do receive the date of their original.
+* **Dates in general.** `--ignore-date-time` drops the date from the
+  comparison altogether. It makes MyBackUpSync blind to a file that was edited
+  without changing its length, so keep it for the drives that cannot carry the
+  modification times faithfully rather than using it by default.
 * **Creation dates.** Only the modification date is compared. A creation date
   is not preserved by a file copy (and on Linux `st_ctime` is not a creation
   date at all), so comparing it would report every copied file as different.

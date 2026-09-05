@@ -46,7 +46,8 @@ class Node:
 
     def __init__(self, name, is_dir, src, dst, direction, reason,
                  src_exists, dst_exists, src_size=None, dst_size=None,
-                 src_mtime=None, dst_mtime=None, is_root=False, detail=""):
+                 src_mtime=None, dst_mtime=None, is_root=False, detail="",
+                 entry=None):
         self.name = name
         self.is_dir = is_dir
         self.src = src                  # absolute path on the computer's drive
@@ -61,6 +62,7 @@ class Node:
         self.dst_mtime = dst_mtime
         self.is_root = is_root
         self.detail = detail            # extra text shown for root lines
+        self.entry = entry              # SyncEntry, root lines only
         self.children = []
         self.parent = None
         self.selected = False
@@ -84,6 +86,27 @@ class Node:
             level += 1
             node = node.parent
         return level
+
+    def rel_parts(self):
+        """The path of this node relative to its configured root.
+
+        This is what :mod:`mbs.config` matches the '!' rules against, so a
+        single node can be compared again without walking the whole forest.
+        """
+        parts = []
+        node = self
+        while node is not None and not node.is_root:
+            parts.append(node.name)
+            node = node.parent
+        parts.reverse()
+        return tuple(parts)
+
+    def owner_entry(self):
+        """The SyncEntry of the configured root this node belongs to."""
+        node = self
+        while node.parent is not None:
+            node = node.parent
+        return node.entry
 
     # -- collapsing ---------------------------------------------------------
     @property
@@ -232,6 +255,52 @@ def restore_expanded(roots, paths):
         for node in root.walk():
             if node.collapsible and node.src in paths:
                 node.expanded = True
+
+
+def subtree_state(node):
+    """Remember what the user did to one subtree, to survive a 'F2' re-read.
+
+    Returns the open directories and the marked entries of ``node`` and of
+    everything below it.
+    """
+    opened = set()
+    marked = set()
+    for item in node.walk():
+        if item.collapsible and item.expanded:
+            opened.add(item.src)
+        if item.selected:
+            marked.add((item.src, item.dst))
+    return opened, marked
+
+
+def restore_subtree_state(node, state):
+    """Re-open and re-mark what :func:`subtree_state` remembered."""
+    opened, marked = state
+    for item in node.walk():
+        if item.collapsible and item.src in opened:
+            item.expanded = True
+        if (item.src, item.dst) in marked:
+            item.selected = True
+
+
+def prune(node):
+    """Drop a directory that only ever existed to hold differing children.
+
+    Used after a 'F2' re-read: when the last difference below a directory is
+    gone, the directory itself has nothing left to say and leaves the list,
+    and so does its parent when it becomes empty in turn.  Returns the topmost
+    node that is still worth showing, or None when a whole root is now in sync.
+    """
+    while node is not None and not node.is_root:
+        parent = node.parent
+        if node.children or node.reason != R_CONTAINER:
+            return node
+        parent.children.remove(node)
+        node.parent = None
+        node = parent
+    if node is not None and node.is_root and not node.children and node.dst_exists:
+        return None
+    return node
 
 
 INFO_WIDTH = 8

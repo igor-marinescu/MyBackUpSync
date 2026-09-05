@@ -19,6 +19,7 @@ from mbs import actions, model, scanner, symbols, terminal  # noqa: E402
 from mbs.config import ConfigError, parse_text             # noqa: E402
 from mbs.screen import Screen                              # noqa: E402
 from mbs.terminal import Terminal                           # noqa: E402
+from mbs.ui import App                                      # noqa: E402
 
 
 def write(path, text="x", mtime=None):
@@ -608,6 +609,184 @@ class ActionTest(DriveTestCase):
         node = self.scan()[0].children[0]
         self.assertFalse(node.can_flip)
         self.assertFalse(node.flip())
+
+
+class IgnoreDateTimeTest(DriveTestCase):
+    """'--ignore-date-time': only the size decides between two same names."""
+
+    def ignoring(self, *rules):
+        roots, warnings = scanner.scan(self.config(*rules), ignore_date_time=True)
+        self.assertEqual(warnings, [])
+        return roots
+
+    def test_a_different_date_alone_is_not_a_difference(self):
+        write(self.c("main.c"), "hello", mtime=5000)
+        write(self.b("main.c"), "hello", mtime=1000)
+        self.assertEqual(model.count_differences(self.scan()), 1)
+        self.assertEqual(self.ignoring(), [])
+
+    def test_a_different_size_is_still_a_difference(self):
+        write(self.c("main.c"), "hello world", mtime=1000)
+        write(self.b("main.c"), "hello", mtime=1000)
+        node = self.ignoring()[0].children[0]
+        self.assertEqual(node.reason, model.R_SIZE)
+
+    def test_a_missing_entry_is_still_a_difference(self):
+        write(self.c("main.c"), "hello")
+        node = self.ignoring()[0].children[0]
+        self.assertEqual(node.reason, model.R_MISSING_BACKUP)
+
+    def test_it_also_silences_the_directory_dates(self):
+        """A directory date is a date too: '--check-dir-times' gives way."""
+        os.makedirs(self.c("cli"))
+        os.makedirs(self.b("cli"))
+        os.utime(self.c("cli"), (5000, 5000))
+        os.utime(self.b("cli"), (1000, 1000))
+        roots, _ = scanner.scan(self.config(), check_dir_times=True,
+                                ignore_date_time=True)
+        self.assertEqual(model.count_differences(roots), 0)
+
+
+class RescanNodeTest(DriveTestCase):
+    """'F2': one single directory is read again, the rest is left alone."""
+
+    def test_a_resolved_directory_disappears(self):
+        write(self.c("cli", "a.c"), "hello", mtime=1000)
+        node = self.scan()[0].children[0]
+        self.assertEqual(node.display_name, "cli/")
+        write(self.b("cli", "a.c"), "hello", mtime=1000)
+        fresh, warnings = scanner.rescan_node(node)
+        self.assertIsNone(fresh)
+        self.assertEqual(warnings, [])
+
+    def test_a_new_file_shows_up(self):
+        write(self.c("cli", "a.c"), "hello", mtime=1000)
+        write(self.b("cli", "a.c"), "hello", mtime=1000)
+        write(self.c("cli", "b.c"), "hello")
+        roots = self.scan()
+        node = roots[0].children[0]
+        self.assertEqual(node.display_name, "cli/")
+        write(self.c("cli", "c.c"), "hello")
+        fresh, _ = scanner.rescan_node(node)
+        self.assertEqual([child.name for child in fresh.children],
+                         ["b.c", "c.c"])
+
+    def test_a_configured_root_can_be_read_again(self):
+        write(self.c("main.c"), "hello", mtime=1000)
+        root = self.scan()[0]
+        write(self.b("main.c"), "hello", mtime=1000)
+        self.assertIsNone(scanner.rescan_node(root)[0])
+
+    def test_the_rules_of_the_entry_still_apply(self):
+        write(self.c("cli", "cli.c"), "hello")
+        node = self.scan("!*/*.cmake")[0].children[0]
+        write(self.c("cli", "make.cmake"), "hello")
+        fresh, _ = scanner.rescan_node(node)
+        self.assertEqual([child.name for child in fresh.children], ["cli.c"])
+
+    def test_it_honours_ignore_date_time(self):
+        write(self.c("cli", "a.c"), "hello", mtime=5000)
+        write(self.b("cli", "a.c"), "hello", mtime=1000)
+        node = self.scan()[0].children[0]
+        self.assertIsNotNone(scanner.rescan_node(node)[0])
+        self.assertIsNone(scanner.rescan_node(node, ignore_date_time=True)[0])
+
+
+class RescanDirCommandTest(DriveTestCase):
+    """The 'F2' command of the user interface, tree surgery included."""
+
+    def app(self, *rules):
+        application = App(self.backup, "config", self.config(*rules))
+        application.rescan(keep_position=False)
+        application.roots[0].set_expanded(True)
+        application.rebuild()
+        return application
+
+    def shown(self, application):
+        return [node.display_name for node, _ in application.rows][1:]
+
+    def move_to(self, application, name):
+        for index, (node, _) in enumerate(application.rows):
+            if node.display_name == name:
+                application.cursor = index
+                return node
+        self.fail("'%s' is not listed: %s" % (name, self.shown(application)))
+
+    def test_only_the_chosen_directory_is_read_again(self):
+        write(self.c("aaa", "a.c"), "hello")
+        write(self.c("bbb", "b.c"), "hello")
+        application = self.app()
+        self.move_to(application, "aaa/")
+        # Resolve both directories behind the back of the application.
+        write(self.b("aaa", "a.c"), "hello")
+        write(self.b("bbb", "b.c"), "hello")
+        application.do_rescan_dir()
+        # 'aaa/' is gone; 'bbb/' stays, it has not been looked at.
+        self.assertEqual(self.shown(application), ["bbb/", "b.c"])
+
+    def test_a_file_refreshes_its_parent_directory(self):
+        write(self.c("cli", "a.c"), "hello")
+        write(self.c("cli", "b.c"), "hello")
+        application = self.app()
+        self.move_to(application, "a.c")
+        write(self.b("cli", "a.c"), "hello")
+        application.do_rescan_dir()
+        self.assertEqual(self.shown(application), ["cli/", "b.c"])
+
+    def test_an_emptied_parent_leaves_the_list_too(self):
+        os.makedirs(self.c("cli"))
+        os.makedirs(self.b("cli"))
+        write(self.c("cli", "sub", "a.c"), "hello")
+        application = self.app()
+        self.move_to(application, "sub/")
+        write(self.b("cli", "sub", "a.c"), "hello")
+        application.do_rescan_dir()
+        # 'sub/' was the only reason 'cli/' and the root were listed.
+        self.assertEqual(application.roots, [])
+        self.assertEqual(application.rows, [])
+
+    def test_a_parent_that_is_a_difference_of_its_own_stays(self):
+        """'cli/' is missing on the backup drive: only 'F1' can clear it."""
+        write(self.c("cli", "sub", "a.c"), "hello")
+        application = self.app()
+        self.move_to(application, "sub/")
+        write(self.b("cli", "sub", "a.c"), "hello")
+        application.do_rescan_dir()
+        self.assertEqual(self.shown(application), ["cli/"])
+        application.rescan()
+        self.assertEqual(application.roots, [])
+
+    def test_open_directories_and_marks_survive(self):
+        write(self.c("cli", "sub", "a.c"), "hello")
+        write(self.c("cli", "b.c"), "hello")
+        application = self.app()
+        self.move_to(application, "b.c").set_selected(True)
+        self.move_to(application, "cli/")
+        write(self.c("cli", "c.c"), "hello")
+        application.do_rescan_dir()
+        self.assertEqual(self.shown(application),
+                         ["cli/", "sub/", "a.c", "b.c", "c.c"])
+        marked = [node.display_name for node in application.roots[0].walk()
+                  if node.selected]
+        self.assertEqual(marked, ["b.c"])
+
+    def test_the_cursor_stays_on_the_refreshed_directory(self):
+        write(self.c("aaa", "a.c"), "hello")
+        write(self.c("bbb", "b.c"), "hello")
+        application = self.app()
+        self.move_to(application, "bbb/")
+        write(self.c("bbb", "c.c"), "hello")
+        application.do_rescan_dir()
+        self.assertEqual(application.current_node().display_name, "bbb/")
+
+    def test_the_direction_of_the_parents_is_recomputed(self):
+        write(self.c("cli", "a.c"), "hello")
+        application = self.app()
+        self.assertEqual(application.roots[0].children[0].direction, model.RIGHT)
+        self.move_to(application, "cli/")
+        write(self.b("cli", "b.c"), "hello")
+        application.do_rescan_dir()
+        self.assertEqual(application.roots[0].children[0].direction, model.BOTH)
 
 
 if __name__ == "__main__":

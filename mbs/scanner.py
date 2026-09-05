@@ -20,9 +20,10 @@ MTIME_TOLERANCE = 2.0
 class Scanner:
     """Builds the difference forest for a list of SyncEntry objects."""
 
-    def __init__(self, entries, check_dir_times=False):
+    def __init__(self, entries, check_dir_times=False, ignore_date_time=False):
         self.entries = entries
         self.check_dir_times = check_dir_times
+        self.ignore_date_time = ignore_date_time
         self.warnings = []
 
     # -- helpers ------------------------------------------------------------
@@ -44,8 +45,21 @@ class Scanner:
             self.warnings.append("cannot list '%s': %s" % (path, exc))
         return result
 
-    @staticmethod
-    def _same_time(left, right):
+    def _stat(self, path):
+        """Return ``(is_dir, stat_result)`` for one entry, None when absent."""
+        try:
+            info = os.stat(path, follow_symlinks=False)
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+        except OSError as exc:
+            self.warnings.append("cannot read '%s': %s" % (path, exc))
+            return None
+        return (stat.S_ISDIR(info.st_mode), info)
+
+    def _same_time(self, left, right):
+        """True when two modification dates must not make a difference."""
+        if self.ignore_date_time:
+            return True
         return abs(left - right) <= MTIME_TOLERANCE
 
     @staticmethod
@@ -194,7 +208,23 @@ class Scanner:
             src_mtime=left_info.st_mtime, dst_mtime=right_info.st_mtime,
         )
 
-    # -- entry point --------------------------------------------------------
+    def _make_root(self, entry):
+        """A fresh, empty root line for one configured directory."""
+        return Node(
+            name=entry.label.rstrip("/"),
+            is_dir=True,
+            src=entry.source,
+            dst=entry.target,
+            direction=model.NONE,
+            reason=model.R_CONTAINER,
+            src_exists=os.path.isdir(entry.source),
+            dst_exists=os.path.isdir(entry.target),
+            is_root=True,
+            detail=entry.source,
+            entry=entry,
+        )
+
+    # -- entry points -------------------------------------------------------
     def scan(self):
         """Return the list of root nodes, one per configured directory.
 
@@ -204,27 +234,59 @@ class Scanner:
         self.warnings = []
         roots = []
         for entry in self.entries:
-            root = Node(
-                name=entry.label.rstrip("/"),
-                is_dir=True,
-                src=entry.source,
-                dst=entry.target,
-                direction=model.NONE,
-                reason=model.R_CONTAINER,
-                src_exists=os.path.isdir(entry.source),
-                dst_exists=os.path.isdir(entry.target),
-                is_root=True,
-                detail=entry.source,
-            )
+            root = self._make_root(entry)
             self._compare_dir(entry, root, entry.source, entry.target, ())
             # Nothing differs and the backup directory is there: fully in sync.
             if root.children or not root.dst_exists:
                 roots.append(root)
         return roots
 
+    def rescan_node(self, node):
+        """Compare one single directory again, without touching the others.
 
-def scan(entries, check_dir_times=False):
+        ``node`` is a directory of an existing forest; both drives are read
+        again for that directory only and a brand new node is returned, ready
+        to replace ``node`` in its parent.  None means the directory is now
+        completely synchronised and has to leave the list.
+        """
+        self.warnings = []
+        entry = node.owner_entry()
+        if entry is None:                       # a hand built node, no config
+            return node
+        if node.is_root:
+            root = self._make_root(entry)
+            self._compare_dir(entry, root, entry.source, entry.target, ())
+            if root.children or not root.dst_exists:
+                return root
+            return None
+
+        rel = node.rel_parts()
+        left = self._stat(node.src)
+        right = self._stat(node.dst)
+        if left is None and right is None:      # gone from both drives
+            return None
+        if left is not None and right is not None:
+            return self._compare_pair(entry, node.name, node.src, node.dst,
+                                      rel, left, right)
+        if left is not None:
+            return self._only_on_one_side(entry, node.name, node.src, node.dst,
+                                          rel, left, model.RIGHT)
+        return self._only_on_one_side(entry, node.name, node.src, node.dst,
+                                      rel, right, model.LEFT)
+
+
+def scan(entries, check_dir_times=False, ignore_date_time=False):
     """Convenience wrapper: returns (roots, warnings)."""
-    scanner = Scanner(entries, check_dir_times)
+    scanner = Scanner(entries, check_dir_times, ignore_date_time)
     roots = scanner.scan()
     return roots, scanner.warnings
+
+
+def rescan_node(node, check_dir_times=False, ignore_date_time=False):
+    """Convenience wrapper around :meth:`Scanner.rescan_node`.
+
+    Returns ``(fresh_node_or_None, warnings)``.
+    """
+    scanner = Scanner([], check_dir_times, ignore_date_time)
+    fresh = scanner.rescan_node(node)
+    return fresh, scanner.warnings

@@ -44,6 +44,10 @@ def build_parser():
                              "differs while their content is identical "
                              "(off by default: a directory date changes on its "
                              "own whenever its content is written)")
+    parser.add_argument("--ignore-date-time", action="store_true",
+                        help="do not treat two entries with the same name and "
+                             "the same size as different when only their "
+                             "modification date and time differ")
     parser.add_argument("--ascii", action="store_true",
                         help="draw the interface with plain 7 bit characters "
                              "instead of the Unicode box drawing glyphs")
@@ -56,7 +60,7 @@ def build_parser():
 
 
 def print_list(backup_root, config_path, entries, check_dir_times,
-               ascii_only=False):
+               ascii_only=False, ignore_date_time=False):
     """Non interactive output, same format as the Main Pane."""
     from mbs import model, scanner, symbols
 
@@ -66,7 +70,7 @@ def print_list(backup_root, config_path, entries, check_dir_times,
         pass
     symbols.select(ascii_only, sys.stdout)
 
-    roots, warnings = scanner.scan(entries, check_dir_times)
+    roots, warnings = scanner.scan(entries, check_dir_times, ignore_date_time)
     print("%s %s - list of differences" % (APP_NAME, __version__))
     print("backup drive  : %s" % backup_root)
     print("configuration : %s" % config_path)
@@ -97,10 +101,12 @@ def main(argv=None):
 
     if options.plain_list:
         return print_list(backup_root, config_path, entries,
-                          options.check_dir_times, options.ascii)
+                          options.check_dir_times, options.ascii,
+                          options.ignore_date_time)
 
     application = App(backup_root, config_path, entries,
-                      options.check_dir_times, options.ascii)
+                      options.check_dir_times, options.ascii,
+                      options.ignore_date_time)
     try:
         return application.run()
     except KeyboardInterrupt:
